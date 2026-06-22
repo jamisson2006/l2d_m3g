@@ -1,6 +1,10 @@
 package com;
 
 import java.util.Vector;
+import javax.microedition.m3g.Group;
+import javax.microedition.m3g.Mesh;
+import javax.microedition.m3g.PolygonMode;
+import javax.microedition.m3g.RayIntersection;
 
 public class Room {
 
@@ -16,7 +20,8 @@ public class Room {
 		this.mesh = mesh;
 		this.id = id;
 
-		Vector3D min = mesh.getAABBMin(), max = mesh.getAABBMax();
+		Vector3D min = new Vector3D(), max = new Vector3D();
+		mesh.calculateAABB(min, max);
 		
 		this.minx = min.x;
 		this.maxx = max.x;
@@ -29,12 +34,27 @@ public class Room {
 		int centerZ = (this.maxz + this.minz) / 2;
 		this.openSky = true;
 		
-		Ray ray = new Ray();
-		ray.start.set(centerX, miny - 1, centerZ);
-		ray.dir.set(0, (maxy - miny) + 1, 0);
-		RayCast.rayCast(mesh, ray);
+		Mesh m3gMesh = mesh.getM3GMesh();
+		
+		if(m3gMesh != null) {
+			m3gMesh.setUserID(id);
 
-		if(ray.collision && ray.normal.y > 2048) openSky = false;
+			Group tmpGroup = new Group();
+			tmpGroup.addChild(m3gMesh);
+			
+			PolygonMode pm = m3gMesh.getAppearance(0).getPolygonMode();
+			int oldCulling = pm.getCulling();
+			pm.setCulling(PolygonMode.CULL_NONE);
+
+			RayIntersection ri = new RayIntersection();
+			boolean hit = tmpGroup.pick(-1, centerX, maxy + 1, centerZ, 0, -1, 0, ri);
+			
+			pm.setCulling(oldCulling);
+			
+			tmpGroup.removeChild(m3gMesh);
+
+			if(hit && ri.getNormalY() < 0.5) openSky = false;
+		}
 	}
 
 	public final void destroy() {
@@ -96,22 +116,14 @@ public class Room {
 	 */
 	public final boolean sphereCast(Vector3D pos, int rad) {
 		if(pos.x + rad >= minx && 
-			pos.y + rad >= miny && 
 			pos.z + rad >= minz && 
 			pos.x - rad <= maxx && 
-			pos.y - rad <= maxy && 
 			pos.z - rad <= maxz) {
 			
 			return SphereCast.sphereCast(this.mesh, pos, rad);
 		}
 		
 		return false;
-	}
-	
-	public final void rayCast(Ray ray) {
-		if(RayCast.isRayAABBCollision(ray, minx, maxx, miny, maxy, minz, maxz)) {
-			RayCast.rayCast(mesh, ray);
-		}
 	}
 
 	public final int getMinX() {
@@ -155,7 +167,7 @@ public class Room {
 	}
 
 	public final boolean viewportContains(int x1, int y1, int x2, int y2) {
-		return x1 >= this.x1 && y1 >= this.y1 && x2 <= this.x2 && y2 <= this.y2;
+		return !(x1 >= this.x2 || y1 >= this.y2 || x2 < this.x1 || y2 < this.y1);
 	}
 	//public aq() {}
 }

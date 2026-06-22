@@ -2,6 +2,9 @@ package com;
 
 import java.util.Vector;
 import javax.microedition.lcdui.Graphics;
+import javax.microedition.m3g.Group;
+import javax.microedition.m3g.Mesh;
+import javax.microedition.m3g.RayIntersection;
 
 public final class House {
 
@@ -13,7 +16,8 @@ public final class House {
 	private Skybox skybox;
 	private Vector objects = new Vector(); // из Room
 	
-	private final Ray ray = new Ray();
+	private final RayIntersection ri = new RayIntersection();
+	private Group physGroup = new Group();
 
 	public House(Room[] rooms, Room[][] neighbours, Portal[] portals) {
 		this.rooms = rooms;
@@ -107,33 +111,56 @@ public final class House {
 
 	public final void rayCast(int part, Ray ray) {
 		Vector nearRooms = getNearRooms(part);
-		
+
 		for(int i = 0; i < nearRooms.size(); ++i) {
 			Room room = (Room) nearRooms.elementAt(i);
-			room.rayCast(ray);
+			physGroup.addChild(room.getMesh().getM3GMesh());
+		}
+		
+		Vector3D rayStart = ray.start;
+		Vector3D rayDir = ray.dir;
+		
+		boolean hit = physGroup.pick(-1, rayStart.x, rayStart.y, rayStart.z, rayDir.x, rayDir.y, rayDir.z, ri);
+
+		while(physGroup.getChildCount() > 0) {
+			physGroup.removeChild(physGroup.getChild(0));
+		}
+		
+		if(hit) {
+			float d = ri.getDistance();
+			if(d > 1) return;
+			
+			ray.collision = true;
+			ray.collisionPoint.x = (int) (rayStart.x + rayDir.x * d);
+			ray.collisionPoint.y = (int) (rayStart.y + rayDir.y * d);
+			ray.collisionPoint.z = (int) (rayStart.z + rayDir.z * d);
+			
+			ray.distance = (int) (d * 4096);
 		}
 	}
 
 	// ??? максимальное значение y дома (house), которое ниже точки (x,y,z)
 	public final int getFloorY(int part, int x, int y, int z) {
-		ray.reset();
-		ray.start.set(x, y, z);
-		
 		Vector nearRooms = getNearRooms(part);
 
 		for(int i = 0; i < nearRooms.size(); ++i) {
 			Room room = (Room) nearRooms.elementAt(i);
-			
-			ray.dir.set(0, -(room.getMaxY() - room.getMinY()), 0);
-			room.rayCast(ray);
+			//room.rayCast(ray);
+			physGroup.addChild(room.getMesh().getM3GMesh());
 		}
 		
-		if(ray.collision && ray.normal.y < 0) return ray.collisionPoint.y;
+		boolean hit = physGroup.pick(-1, x, y, z, 0, -1, 0, ri);
+
+		while(physGroup.getChildCount() > 0) {
+			physGroup.removeChild(physGroup.getChild(0));
+		}
+		
+		//normal y < 0 is ignored due to back face culling
+		if(hit) return y - (int) ri.getDistance();
 		return Integer.MAX_VALUE;
 	}
 
 	public final int render(Renderer g3d, int part, Vector3D camPos) {
-		if(skybox != null) skybox.resetViewport();
 		int rooms = 0;
 		
 		if(part != -1) {
@@ -165,6 +192,7 @@ public final class House {
 
 		if(skybox != null && skybox.isVisible()) {
 			skybox.render(g3d, camPos);
+			skybox.resetViewport();
 		}
 
 		return rooms;
@@ -191,7 +219,6 @@ public final class House {
 			if(portal == prevPortal) continue;
 			
 			if(!reachedPortals.contains(portal)) reachedPortals.addElement(portal);
-			if(portal.getVisibleRoomId(g3d) == mainRoom.getId()) continue;
 			if(!portal.isVisible(g3d, x1, y1, x2, y2)) continue;
 
 			int minX = portal.getMinX();
@@ -209,8 +236,8 @@ public final class House {
 			int sizeY = maxY - minY;
 			if((sizeX < 20 && sizeY < 20) || sizeX < 5 || sizeY < 5) continue;
 			
-			Room room = portal.getRoomFront();
-			if(room == mainRoom) room = portal.getRoomBack();
+			Room room = portal.getRoom1();
+			if(room == mainRoom) room = portal.getRoom2();
 
 			if(room != null) {
 				if(nearRooms.contains(room) && room.viewportContains(minX, minY, maxX, maxY)) continue;
@@ -226,7 +253,6 @@ public final class House {
 		
 		for(int i = 0; i < reachedPortals.size(); i++) {
 			Portal p = (Portal) reachedPortals.elementAt(i);
-			if(!p.isViewportCalculated()) continue;
 
 			Vector3D[] verts = p.getProjVertices();
 			int projVertsCount = p.getProjVertsCount();
@@ -250,14 +276,6 @@ public final class House {
 					room.getViewportMinX()+ x, room.getViewportMinY() + y,
 					room.getViewportMaxX() - 1 - room.getViewportMinX(),
 					room.getViewportMaxY() - 1 - room.getViewportMinY());
-		}
-		
-		if(skybox != null && skybox.isVisible()) {
-			g.setColor(0x00ffff);
-			g.drawRect(
-					skybox.getViewportMinX()+ x, skybox.getViewportMinY() + y,
-					skybox.getViewportMaxX() - 1 - skybox.getViewportMinX(),
-					skybox.getViewportMaxY() - 1 - skybox.getViewportMinY());
 		}
 		
 		g.setColor(oldColor);
@@ -288,14 +306,11 @@ public final class House {
 	public final void recomputePart(RoomObject obj) {
 		if(obj.isNeedRecomputePart()) {
 			int x = obj.getPosX();
-			int y = obj.getPosY() + obj.getHeight();
 			int z = obj.getPosZ();
-			
-			int oldPart = obj.getPart();
-			int part = computePart(oldPart, x, y, z);
+			int part = this.computePart(obj.getPart(), x, z);
 			
 			if(part == -1) {
-				//System.out.println("House.recalculatePart: newPart == -1  x=" + x + " y=" + y + " z=" + z + "  " + obj);
+				System.out.println("House.recalculatePart: newPart == -1  x=" + x + " z=" + z + "  " + obj);
 			} else {
 				obj.setPart(part);
 			}
@@ -303,44 +318,44 @@ public final class House {
 	}
 
 	//todo disable back face culling
-	public final int computePart(int oldPart, int x, int y, int z) {
+	public final int computePart(int oldPart, int x, int z) {
 		if(oldPart != -1) {
+			Group physGroup = this.physGroup;
 			Room oldRoom = rooms[oldPart];
 			
-			ray.reset();
-			ray.start.set(x, y, z);
-			ray.dir.set(0, -(oldRoom.getMaxY() - oldRoom.getMinY()), 0);
+			physGroup.addChild(oldRoom.getMesh().getM3GMesh());
+			boolean hit = physGroup.pick(-1, x, oldRoom.getMaxY() + 1, z, 0, -1, 0, ri);
+			physGroup.removeChild(physGroup.getChild(0));
 			
-			oldRoom.rayCast(ray);
-			if(ray.collision) return oldPart;
+			if(hit) return oldPart;
 
-			int newPart = computePartRoomsList(neighbours[oldPart], x, y, z);
+			int newPart = computePartRoomsList(neighbours[oldPart], x, z);
 			if(newPart != -1) return newPart;
 		}
 
-		int newPart = computePartRoomsList(rooms, x, y, z);
+		int newPart = computePartRoomsList(rooms, x, z);
 		return newPart;
 	}
 	
-	private final int computePartRoomsList(Room[] rooms, int x, int y, int z) {
-		int newPart = -1;
+	private final int computePartRoomsList(Room[] rooms, int x, int z) {
+		Group physGroup = this.physGroup;
 		int maxY = Integer.MIN_VALUE;
 		
 		for(int i = 0; i < rooms.length; i++) {
 			Room room = rooms[i];
-		
-			ray.reset();
-			ray.start.set(x, y, z);
-			ray.dir.set(0, -(room.getMaxY() - room.getMinY()), 0);
-			
-			room.rayCast(ray);
-			
-			if(ray.collision && ray.collisionPoint.y > maxY) {
-				maxY = ray.collisionPoint.y;
-				newPart = room.getId();
-			}
+			Mesh mesh = room.getMesh().getM3GMesh();
+			if(mesh == null) continue; //todo WHY
+			physGroup.addChild(mesh);
+			if(room.getMaxY() > maxY) maxY = room.getMaxY();
 		}
 		
-		return newPart;
+		boolean hit = physGroup.pick(-1, x, maxY + 1, z, 0, -1, 0, ri);
+		
+		while(physGroup.getChildCount() > 0) {
+			physGroup.removeChild(physGroup.getChild(0));
+		}
+		
+		if(hit) return ri.getIntersected().getUserID();
+		return -1;
 	}
 }

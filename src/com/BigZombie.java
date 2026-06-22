@@ -17,12 +17,14 @@ public final class BigZombie extends Bot {
 	private Vector3D targetPos = new Vector3D();
 
 	static {
-		Texture tex = Texture.createTexture("/big_zombie.bmp");
-		meshes = MeshData.loadMeshes3D2("/big_zombie.3d2", tex.img, 50.0F * 300, true, false);
+		Texture texture = Texture.createTexture("/big_zombie.png");
+		meshes = MeshData.loadMeshes("/big_zombie.3d", 50.0F, texture.w, true, false);
 		
 		MeshData mesh = meshes[0];
+		mesh.setTexture(texture);
 
-		Vector3D min = mesh.getAABBMin(), max = mesh.getAABBMax();
+		Vector3D min = new Vector3D(), max = new Vector3D();
+		mesh.calculateAABB(min, max);
 		modelHeight = max.y - min.y;
 	}
 
@@ -88,7 +90,7 @@ public final class BigZombie extends Bot {
 				} else {
 					//Walk towards portal
 					Portal portal = commonPortal(house, getPart(), target.getPart());
-					if(portal != null) targetPos.set(portal.getCenter());
+					if(portal != null) computePortalCentre(portal, targetPos);
 				}
 
 				lookAt(targetPos.x, targetPos.z);
